@@ -62,6 +62,7 @@ type Config struct {
 	OpenAI OpenAIConfig `yaml:"openai"`
 	Cache  CacheConfig  `yaml:"cache"`
 	Radar  RadarConfig  `yaml:"radar"`
+	Cloud  CloudConfig  `yaml:"cloud"`
 }
 
 type ServerConfig struct {
@@ -98,6 +99,31 @@ type RadarConfig struct {
 	AlertWorkers   int      `yaml:"alert_workers"`
 }
 
+type CloudConfig struct {
+	Enabled bool `yaml:"enabled"`
+
+	EmitEvery Duration `yaml:"emit_every"`
+	StaleAfter Duration `yaml:"stale_after"`
+
+	// Percent units, e.g. 0.003 == 0.003%
+	DeadbandPct float64 `yaml:"deadband_pct"`
+
+	// Clamp per-symbol delta % per update. 0 disables clamping.
+	CapMovePct float64 `yaml:"cap_move_pct"`
+
+	// Percent magnitude mapping to strength=1.0
+	StrengthPct float64 `yaml:"strength_pct"`
+
+	// EWMA alpha
+	Smoothing float64 `yaml:"smoothing"`
+
+	MinRateHz float64 `yaml:"min_rate_hz"`
+	MaxRateHz float64 `yaml:"max_rate_hz"`
+
+	// 0..1 blend: breadth vs avg move
+	BreadthWeight float64 `yaml:"breadth_weight"`
+}
+
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
@@ -129,6 +155,18 @@ func Default() Config {
 			HistoryWindow:  Duration(5 * time.Minute),
 			AlertWorkers:   2,
 		},
+		Cloud: CloudConfig{
+			Enabled:       true,
+			EmitEvery:     Duration(200 * time.Millisecond),
+			StaleAfter:    Duration(3 * time.Second),
+			DeadbandPct:   0.003,
+			CapMovePct:    0.30,
+			StrengthPct:   0.03,
+			Smoothing:     0.25,
+			MinRateHz:     1.0,
+			MaxRateHz:     12.0,
+			BreadthWeight: 0.45,
+		},
 	}
 }
 
@@ -141,12 +179,17 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
 	}
+
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 8091
 	}
 	if cfg.Server.Bind == "" {
 		cfg.Server.Bind = "0.0.0.0"
 	}
+	if cfg.Server.ReadHeaderTimeout.ToDuration() <= 0 {
+		cfg.Server.ReadHeaderTimeout = Duration(5 * time.Second)
+	}
+
 	if cfg.Massive.APIKeyEnv == "" {
 		cfg.Massive.APIKeyEnv = "MASSIVE_API_KEY"
 	}
@@ -168,6 +211,9 @@ func Load(path string) (Config, error) {
 	if cfg.OpenAI.Speed <= 0 {
 		cfg.OpenAI.Speed = 1.0
 	}
+	if cfg.OpenAI.Timeout.ToDuration() <= 0 {
+		cfg.OpenAI.Timeout = Duration(30 * time.Second)
+	}
 	if cfg.OpenAI.MaxTextChars <= 0 {
 		cfg.OpenAI.MaxTextChars = 500
 	}
@@ -177,7 +223,47 @@ func Load(path string) (Config, error) {
 	if cfg.Radar.AlertWorkers <= 0 {
 		cfg.Radar.AlertWorkers = 2
 	}
+	if cfg.Radar.GlobalCooldown.ToDuration() <= 0 {
+		cfg.Radar.GlobalCooldown = Duration(25 * time.Second)
+	}
+	if cfg.Radar.HistoryWindow.ToDuration() <= 0 {
+		cfg.Radar.HistoryWindow = Duration(5 * time.Minute)
+	}
+
+	// Cloud sanity (don’t override user values unless they are invalid)
+	if cfg.Cloud.EmitEvery.ToDuration() <= 0 {
+		cfg.Cloud.EmitEvery = Duration(200 * time.Millisecond)
+	}
+	if cfg.Cloud.StaleAfter.ToDuration() <= 0 {
+		cfg.Cloud.StaleAfter = Duration(3 * time.Second)
+	}
+	if cfg.Cloud.DeadbandPct < 0 {
+		cfg.Cloud.DeadbandPct = 0
+	}
+	if cfg.Cloud.CapMovePct < 0 {
+		cfg.Cloud.CapMovePct = -cfg.Cloud.CapMovePct
+	}
+	if cfg.Cloud.StrengthPct < 0 {
+		cfg.Cloud.StrengthPct = -cfg.Cloud.StrengthPct
+	}
+	if cfg.Cloud.Smoothing <= 0 || cfg.Cloud.Smoothing > 1 {
+		cfg.Cloud.Smoothing = 0.25
+	}
+	if cfg.Cloud.MinRateHz < 0 {
+		cfg.Cloud.MinRateHz = 0
+	}
+	if cfg.Cloud.MaxRateHz <= 0 {
+		cfg.Cloud.MaxRateHz = 12.0
+	}
+	if cfg.Cloud.MaxRateHz < cfg.Cloud.MinRateHz {
+		cfg.Cloud.MaxRateHz = cfg.Cloud.MinRateHz
+	}
+	if cfg.Cloud.BreadthWeight < 0 {
+		cfg.Cloud.BreadthWeight = 0
+	}
+	if cfg.Cloud.BreadthWeight > 1 {
+		cfg.Cloud.BreadthWeight = 1
+	}
+
 	return cfg, nil
 }
-
-

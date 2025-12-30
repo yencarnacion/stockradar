@@ -28,3 +28,14 @@ radar:
   alert_workers: 2
 
 
+cloud:
+  enabled: true
+  emit_every: "200ms"
+  stale_after: "3s"
+  deadband_pct: 0.003
+  cap_move_pct: 0.30
+  strength_pct: 0.03
+  smoothing: 0.25
+  min_rate_hz: 1.0
+  max_rate_hz: 12.0
+  breadth_weight: 0.45

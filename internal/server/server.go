@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -31,6 +31,17 @@ type Event struct {
 	Message  string    `json:"message"`
 	AudioURL string    `json:"audio_url,omitempty"`
 	CacheHit bool      `json:"cache_hit,omitempty"`
+
+	// Optional direction/intensity metadata (cloud + alert coloring)
+	Direction string  `json:"direction,omitempty"` // up | down | flat
+	Strength  float64 `json:"strength,omitempty"`  // 0..1 (cloud)
+	Score     float64 `json:"score,omitempty"`     // % (cloud)
+	Adv       int     `json:"adv,omitempty"`
+	Dec       int     `json:"dec,omitempty"`
+	Flat      int     `json:"flat,omitempty"`
+	Active    int     `json:"active,omitempty"`
+	Total     int     `json:"total,omitempty"`
+	RateHz    float64 `json:"rate_hz,omitempty"` // cloud suggested tick rate
 }
 
 type Server struct {
@@ -41,6 +52,13 @@ type Server struct {
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
 	history []Event
+
+	// High-frequency “cloud” events are not stored in history; only keep latest.
+	hasCloud bool
+	cloud    Event
+
+	// Precomputed short cue audio URLs (up/down/flat/etc)
+	cues map[string]string
 }
 
 func New(cfg Config, ttsClient *tts.Client, log zerolog.Logger) *Server {
@@ -64,11 +82,22 @@ func New(cfg Config, ttsClient *tts.Client, log zerolog.Logger) *Server {
 		log:     log,
 		clients: make(map[chan []byte]struct{}),
 		history: make([]Event, 0, 200),
+		cues:    make(map[string]string),
 	}
 }
 
 func (s *Server) Addr() string {
 	return fmt.Sprintf("http://%s:%d", s.cfg.Bind, s.cfg.Port)
+}
+
+// SetCues lets main() install pre-generated cue URLs ("/audio/<hash>.mp3").
+func (s *Server) SetCues(c map[string]string) {
+	s.mu.Lock()
+	s.cues = make(map[string]string, len(c))
+	for k, v := range c {
+		s.cues[k] = v
+	}
+	s.mu.Unlock()
 }
 
 func (s *Server) Start(ctx context.Context) error {
@@ -83,6 +112,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// History API
 	mux.HandleFunc("/api/events", s.handleEventsJSON)
+	mux.HandleFunc("/api/cloud", s.handleCloudJSON)
+
+	// New: cue map (up/down/flat) so UI can play instantly without generating on-demand
+	mux.HandleFunc("/api/cues", s.handleCuesJSON)
 
 	// Quick TTS test endpoint:
 	//   GET /api/speak?text=hello
@@ -135,6 +168,23 @@ func (s *Server) Start(ctx context.Context) error {
 
 func (s *Server) Broadcast(ev Event) {
 	s.mu.Lock()
+
+	// Cloud events: keep only latest; do not pollute history.
+	if ev.Type == "cloud" {
+		s.cloud = ev
+		s.hasCloud = true
+
+		b, _ := json.Marshal(ev)
+		for ch := range s.clients {
+			select {
+			case ch <- b:
+			default:
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+
 	// history
 	if len(s.history) >= 500 {
 		s.history = s.history[len(s.history)-400:]
@@ -168,8 +218,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.clients[clientCh] = struct{}{}
-	// send recent history on connect
+	// copy history + latest cloud
 	hist := append([]Event(nil), s.history...)
+	cloud := s.cloud
+	hasCloud := s.hasCloud
 	s.mu.Unlock()
 
 	// initial: history events
@@ -177,6 +229,13 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(ev)
 		fmt.Fprintf(w, "data: %s\n\n", b)
 	}
+
+	// initial: last cloud (single)
+	if hasCloud {
+		b, _ := json.Marshal(cloud)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+	}
+
 	flusher.Flush()
 
 	notify := r.Context().Done()
@@ -208,11 +267,45 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEventsJSON(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	h := append([]Event(nil), s.history...)
+	cloud := s.cloud
+	hasCloud := s.hasCloud
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]any{
+		"events": h,
+	}
+	if hasCloud {
+		resp["cloud"] = cloud
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleCloudJSON(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	cloud := s.cloud
+	hasCloud := s.hasCloud
+	s.mu.Unlock()
+
+	if !hasCloud {
+		http.Error(w, "cloud not ready yet", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cloud)
+}
+
+func (s *Server) handleCuesJSON(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	out := make(map[string]string, len(s.cues))
+	for k, v := range s.cues {
+		out[k] = v
+	}
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"events": h,
+		"cues": out,
 	})
 }
 
@@ -235,5 +328,3 @@ func (s *Server) handleSpeak(w http.ResponseWriter, r *http.Request) {
 		"cache_hit": res.CacheHit,
 	})
 }
-
-

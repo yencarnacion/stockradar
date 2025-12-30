@@ -103,6 +103,38 @@ func main() {
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.ToDuration(),
 	}, ttsClient, log.Logger)
 
+	// ---- NEW: Pre-generate the cloud cue audio ON STARTUP (only if missing) ----
+	// This ensures "up / down / flat" (and strong variants) are already in ./cache/audio.
+	{
+		cueTexts := map[string]string{
+			"up":         "up",
+			"upStrong":   "UP!",
+			"down":       "down",
+			"downStrong": "DOWN!",
+			"flat":       "flat",
+		}
+
+		cues := make(map[string]string, len(cueTexts))
+		timeout := cfg.OpenAI.Timeout.ToDuration()
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+
+		for key, phrase := range cueTexts {
+			cctx, ccancel := context.WithTimeout(ctx, timeout)
+			res, err := ttsClient.SpeakToFile(cctx, phrase)
+			ccancel()
+
+			if err != nil {
+				log.Error().Err(err).Str("cue", key).Str("text", phrase).Msg("failed to pre-generate cue")
+				continue
+			}
+			cues[key] = "/audio/" + filepath.Base(res.Path)
+		}
+
+		srv.SetCues(cues)
+	}
+
 	go func() {
 		if err := srv.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("http server stopped with error")
@@ -110,11 +142,62 @@ func main() {
 		}
 	}()
 
-	// Radar engine
+	// Radar engine (per-symbol alerts)
 	engine := radar.NewEngine(radar.Config{
 		GlobalCooldown: cfg.Radar.GlobalCooldown.ToDuration(),
 		HistoryWindow:  cfg.Radar.HistoryWindow.ToDuration(),
 	}, wl, log.Logger)
+
+	// Cloud engine (watchlist-wide “geiger” signal)
+	cloud := radar.NewCloudEngine(radar.CloudConfig{
+		Enabled:       cfg.Cloud.Enabled,
+		EmitEvery:     cfg.Cloud.EmitEvery.ToDuration(),
+		StaleAfter:    cfg.Cloud.StaleAfter.ToDuration(),
+		DeadbandPct:   cfg.Cloud.DeadbandPct,
+		CapMovePct:    cfg.Cloud.CapMovePct,
+		StrengthPct:   cfg.Cloud.StrengthPct,
+		Smoothing:     cfg.Cloud.Smoothing,
+		MinRateHz:     cfg.Cloud.MinRateHz,
+		MaxRateHz:     cfg.Cloud.MaxRateHz,
+		BreadthWeight: cfg.Cloud.BreadthWeight,
+	}, wl, log.Logger)
+
+	// Periodically publish cloud state (UI drives continuous sound based on latest state)
+	if cfg.Cloud.Enabled {
+		emitEvery := cfg.Cloud.EmitEvery.ToDuration()
+		if emitEvery <= 0 {
+			emitEvery = 200 * time.Millisecond
+		}
+		go func() {
+			tk := time.NewTicker(emitEvery)
+			defer tk.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tk.C:
+					snap := cloud.Snapshot(time.Now())
+					srv.Broadcast(server.Event{
+						Time:      snap.Time,
+						Symbol:    "CLOUD",
+						Price:     0,
+						Type:      "cloud",
+						Message:   snap.Message,
+						Direction: snap.Direction,
+						Strength:  snap.Strength,
+						Score:     snap.ScorePct,
+						Adv:       snap.Adv,
+						Dec:       snap.Dec,
+						Flat:      snap.Flat,
+						Active:    snap.Active,
+						Total:     snap.Total,
+						RateHz:    snap.RateHz,
+					})
+				}
+			}
+		}()
+	}
 
 	alertCh := make(chan radar.Alert, 1024)
 
@@ -127,11 +210,12 @@ func main() {
 					return
 				case a := <-alertCh:
 					ev := server.Event{
-						Time:    time.Now(),
-						Symbol:  a.Symbol,
-						Price:   a.Price,
-						Type:    string(a.Type),
-						Message: a.Message,
+						Time:      time.Now(),
+						Symbol:    a.Symbol,
+						Price:     a.Price,
+						Type:      string(a.Type),
+						Message:   a.Message,
+						Direction: directionFromAlertType(a.Type),
 					}
 
 					// Generate (or reuse cached) MP3
@@ -200,13 +284,17 @@ func main() {
 				continue
 			}
 
-			// We handle EquityAgg (and also pointer forms, just in case)
 			switch msg := out.(type) {
 			case wsmodels.EquityAgg:
 				t, ok := tickFromAny(msg)
 				if !ok {
 					continue
 				}
+
+				// Update cloud (watchlist-wide signal)
+				cloud.Update(t.Symbol, t.Price, t.Time)
+
+				// Per-symbol alert engine
 				alerts := engine.Update(t.Symbol, t.Price, t.Volume, t.Time)
 				for _, a := range alerts {
 					select {
@@ -221,6 +309,9 @@ func main() {
 				if !ok {
 					continue
 				}
+
+				cloud.Update(t.Symbol, t.Price, t.Time)
+
 				alerts := engine.Update(t.Symbol, t.Price, t.Volume, t.Time)
 				for _, a := range alerts {
 					select {
@@ -229,10 +320,23 @@ func main() {
 						log.Warn().Msg("alert channel full; dropping alert")
 					}
 				}
+
 			default:
-				// ignore other message types (trades, status, etc.)
+				// ignore other message types
 			}
 		}
+	}
+}
+
+func directionFromAlertType(t radar.AlertType) string {
+	s := strings.ToLower(strings.TrimSpace(string(t)))
+	switch {
+	case strings.Contains(s, "down") || strings.Contains(s, "below"):
+		return "down"
+	case strings.Contains(s, "up") || strings.Contains(s, "above"):
+		return "up"
+	default:
+		return ""
 	}
 }
 
@@ -348,4 +452,3 @@ func pickInt64(m map[string]any, keys ...string) int64 {
 	}
 	return 0
 }
-
