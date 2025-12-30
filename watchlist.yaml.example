@@ -1,0 +1,38 @@
+symbols:
+  - ticker: AAPL
+    name: Apple
+    base_change:
+      up_pct: 1.0
+      down_pct: 1.0
+      cooldown: "90s"
+    momentum:
+      window: "60s"
+      up_pct: 0.4
+      down_pct: 0.4
+      cooldown: "60s"
+
+  - ticker: TSLA
+    name: Tesla
+    base_change:
+      up_pct: 1.5
+      down_pct: 1.5
+      cooldown: "90s"
+    momentum:
+      window: "60s"
+      up_pct: 0.6
+      down_pct: 0.6
+      cooldown: "60s"
+
+  - ticker: NVDA
+    name: NVIDIA
+    base_change:
+      up_pct: 1.2
+      down_pct: 1.2
+      cooldown: "90s"
+    momentum:
+      window: "60s"
+      up_pct: 0.5
+      down_pct: 0.5
+      cooldown: "60s"
+
+
