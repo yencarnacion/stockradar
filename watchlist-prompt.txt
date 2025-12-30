@@ -1,0 +1,60 @@
+You are a YAML transformer.
+
+Goal:
+- Convert the INPUT watchlist YAML into a new YAML file named "watchlist-converted.yaml" using the StockRadar watchlist schema:
+  root key: "symbols"
+  each item has: ticker, enabled, base_change, momentum
+- The actual ticker list will vary; do not assume the examples’ tickers.
+
+Accepted input formats (handle whichever you receive):
+1) Legacy minimal format:
+   watchlist:
+     - symbol: "AGQ"
+     - symbol: "SLV"
+
+2) Minimal list format:
+   watchlist:
+     - "AGQ"
+     - "SLV"
+
+3) Already-new-ish format (may already have symbols/ticker):
+   symbols:
+     - ticker: AGQ
+       ...
+
+Conversion rules:
+1) Extract tickers from the input:
+   - If the root has "watchlist", extract each entry’s "symbol" (or string item).
+   - If the root has "symbols", extract each entry’s "ticker" (or "symbol" if present).
+2) Normalize each ticker:
+   - Trim whitespace
+   - Uppercase
+   - Keep special characters if present (e.g., BRK.B) but still uppercase.
+3) De-duplicate tickers (case-insensitive) and sort alphabetically for stable output.
+4) For each ticker, output an entry with these defaults unless input explicitly provides overrides:
+   enabled: true
+   base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
+   momentum:   { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
+
+   Notes:
+   - If the input already provides enabled/base_change/momentum/price_cross/cooldown/name for a symbol, preserve those values.
+   - If a symbol is explicitly disabled in input (enabled: false), keep it false.
+   - If only some rule fields are present, fill missing ones with the defaults above.
+   - Do NOT invent company names. If "name" exists, keep it; otherwise omit it.
+
+Output requirements:
+- Output MUST be valid YAML.
+- Output MUST contain ONLY the YAML for "watchlist-converted.yaml" (no commentary, no markdown, no code fences).
+- Include the following header comment block at the top (exactly; it’s OK if tickers differ):
+
+# watchlist.yaml
+# Sensible defaults:
+# - base_change: alert when price moves +/-1.5% from the session baseline (first seen price after start)
+# - momentum: alert when price moves +/-0.8% over a 60s rolling window
+# - cooldowns: reduce spam/repeats per symbol per rule
+
+Now convert the following INPUT YAML.
+
+<<INPUT_YAML>>
+(PASTE THE ORIGINAL watchlist.yaml CONTENT HERE)
+<<END_INPUT_YAML>>
