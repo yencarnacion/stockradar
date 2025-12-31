@@ -441,7 +441,7 @@ const appJS = `
 
   // Pulse handling (event-driven timing)
   let lastPulseAtMs = 0;
-  const MIN_PULSE_SPACING_MS = 8; // ~125 Hz max “machine gun” cap (adjust if you want)
+  const MIN_PULSE_SPACING_MS = 0; // ~125 Hz max “machine gun” cap (adjust if you want)
 
   let volLogEwma = 0.0;
   let volHas = false;
