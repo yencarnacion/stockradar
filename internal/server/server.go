@@ -27,6 +27,7 @@ type Event struct {
 	Time     time.Time `json:"time"`
 	Symbol   string    `json:"symbol"`
 	Price    float64   `json:"price"`
+	Volume   float64   `json:"volume,omitempty"`
 	Type     string    `json:"type"`
 	Message  string    `json:"message"`
 	AudioURL string    `json:"audio_url,omitempty"`
@@ -42,6 +43,9 @@ type Event struct {
 	Active    int     `json:"active,omitempty"`
 	Total     int     `json:"total,omitempty"`
 	RateHz    float64 `json:"rate_hz,omitempty"` // cloud suggested tick rate
+
+	// For pulse/debug
+	DeltaPct float64 `json:"delta_pct,omitempty"`
 }
 
 type Server struct {
@@ -174,6 +178,19 @@ func (s *Server) Broadcast(ev Event) {
 		s.cloud = ev
 		s.hasCloud = true
 
+		b, _ := json.Marshal(ev)
+		for ch := range s.clients {
+			select {
+			case ch <- b:
+			default:
+			}
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	// Cloud pulse events: DO NOT store in history; just stream to clients.
+	if ev.Type == "cloud_pulse" {
 		b, _ := json.Marshal(ev)
 		for ch := range s.clients {
 			select {

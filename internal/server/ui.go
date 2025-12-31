@@ -343,11 +343,10 @@ const appJS = `
   let cloudVoiceEnabled = true;
 
   let audioCtx = null;
-  let cloudTimer = null;
 
   let cloudDir = 'flat';
   let cloudStrength = 0.0;
-  let cloudRateHz = 0.0;
+  let cloudRateHz = 0.0; // kept for display only (no longer drives audio timing)
 
   // cue URLs fetched from server (/api/cues)
   let cues = { up:null, upStrong:null, down:null, downStrong:null, flat:null };
@@ -367,58 +366,111 @@ const appJS = `
     }
   }
 
-  function stopCloudTimer(){
-    if (cloudTimer) {
-      clearInterval(cloudTimer);
-      cloudTimer = null;
+  // Cloud click mixer (so bursts don’t clip your speakers)
+  let cloudBus = null;
+  let cloudComp = null;
+  let cloudMaster = null;
+
+  function applyCloudMute(){
+    if (cloudMaster) cloudMaster.gain.value = (muted || !cloudEnabled) ? 0.0 : 1.0;
+  }
+
+  function ensureCloudGraph(){
+    ensureAudioCtx();
+    if (!audioCtx) return false;
+
+    if (!cloudBus) {
+      cloudBus = audioCtx.createGain();
+      cloudBus.gain.value = 1.0;
+
+      cloudComp = audioCtx.createDynamicsCompressor();
+      cloudComp.threshold.value = -16;
+      cloudComp.knee.value = 6;
+      cloudComp.ratio.value = 8;
+      cloudComp.attack.value = 0.002;
+      cloudComp.release.value = 0.08;
+
+      cloudMaster = audioCtx.createGain();
+      cloudMaster.gain.value = (muted || !cloudEnabled) ? 0.0 : 1.0;
+
+      cloudBus.connect(cloudComp);
+      cloudComp.connect(cloudMaster);
+      cloudMaster.connect(audioCtx.destination);
     }
+
+    applyCloudMute();
+    return true;
   }
 
-  function startCloudTimer(){
-    stopCloudTimer();
-    if (!cloudEnabled) return;
-    if (!audioEnabled) return;
-    if (muted) return;
-    if (!cloudRateHz || cloudRateHz <= 0) return;
-
-    const intervalMs = Math.max(35, Math.floor(1000 / cloudRateHz));
-    cloudTimer = setInterval(() => {
-      playCloudClick(cloudDir, cloudStrength);
-    }, intervalMs);
-  }
-
-  function playCloudClick(dir, strength){
+  function playCloudClick(dir, strength, volNorm){
     if (!audioCtx) return;
-
-    // If flat, be silent (your “flat” signal is the black frame + spoken "flat")
-    if (dir !== 'up' && dir !== 'down') return;
+    if (!cloudEnabled) return;
+    if (!audioEnabled || muted) return;
+    if (!ensureCloudGraph()) return;
 
     const now = audioCtx.currentTime;
 
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
 
-    // Direction => pitch band
-    const base = (dir === 'up') ? 800 : 240;
-    const span = (dir === 'up') ? 1500 : 650;
-    const freq = base + (span * Math.max(0, Math.min(1, strength)));
+    // Direction => pitch band (flat gets its own band)
+    const s = Math.max(0, Math.min(1, strength || 0));
+    const v = Math.max(0, Math.min(1, (typeof volNorm === 'number') ? volNorm : 0.5));
 
-    // More “clicky / audible”
+    const base = (dir === 'up') ? 800 : (dir === 'down') ? 240 : 520;
+    const span = (dir === 'up') ? 1500 : (dir === 'down') ? 650 : 220;
+    const freq = base + (span * s);
+
     osc.type = 'square';
     osc.frequency.setValueAtTime(freq, now);
 
-    // Louder than before (people reported not hearing it)
-    const vol = 0.05 + 0.16 * Math.max(0, Math.min(1, strength));
+    // Loudness: strength + volume (volume has the bigger say)
+    const baseVol = (dir === 'flat') ? 0.025 : 0.045;
+    const vol = (baseVol + 0.14 * s) * (0.25 + 0.75 * v);
 
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(vol, now + 0.002);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.040);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
 
     osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    gain.connect(cloudBus);
 
     osc.start(now);
-    osc.stop(now + 0.05);
+    osc.stop(now + 0.045);
+  }
+
+  // Pulse handling (event-driven timing)
+  let lastPulseAtMs = 0;
+  const MIN_PULSE_SPACING_MS = 8; // ~125 Hz max “machine gun” cap (adjust if you want)
+
+  let volLogEwma = 0.0;
+  let volHas = false;
+  const VOL_ALPHA = 0.08;
+
+  function onCloudPulse(ev){
+    if (!cloudEnabled) return;
+    if (!audioEnabled || muted) return;
+    ensureAudioCtx();
+    if (!audioCtx) return;
+
+    const nowMs = Date.now();
+    if (nowMs - lastPulseAtMs < MIN_PULSE_SPACING_MS) return;
+    lastPulseAtMs = nowMs;
+
+    const dir = ev.direction || 'flat';
+    const strength = (typeof ev.strength === 'number') ? ev.strength : 0;
+    const volRaw = (typeof ev.volume === 'number') ? ev.volume : 0;
+
+    // Normalize volume using log + EWMA, so “loud” adapts to the symbol mix
+    const lv = Math.log(1 + Math.max(0, volRaw));
+    if (!volHas) { volLogEwma = lv; volHas = true; }
+    else { volLogEwma = (1 - VOL_ALPHA) * volLogEwma + VOL_ALPHA * lv; }
+
+    const denom = Math.max(0.0001, volLogEwma * 2.0);
+    let volNorm = lv / denom;
+    volNorm = Math.max(0, Math.min(1, volNorm));
+
+    playCloudClick(dir, strength, volNorm);
   }
 
   async function loadCues(){
@@ -535,8 +587,6 @@ const appJS = `
     cloudStrength = strength;
     cloudRateHz = rate;
 
-    startCloudTimer();
-
     // Speak "up / down / flat" when appropriate
     maybeSpeakCloud(dir, strength);
   }
@@ -577,8 +627,6 @@ const appJS = `
 
     // Speak current state immediately so you definitely hear "up/down/flat"
     await speakDirOnceNow();
-
-    startCloudTimer();
     pump();
     cloudVoicePump();
   });
@@ -587,13 +635,10 @@ const appJS = `
     muted = !muted;
     setAudio(muted ? 'muted' : (audioEnabled ? 'enabled' : 'disabled'));
     applyVoiceMute();
+    applyCloudMute();
     if (muted) stopCurrentVoice();
-
-    if (muted) {
-      stopCloudTimer();
-    } else {
+    if (!muted) {
       ensureAudioCtx();
-      startCloudTimer();
       pump();
       cloudVoicePump();
     }
@@ -603,8 +648,7 @@ const appJS = `
     cloudEnabled = !cloudEnabled;
     cloudSoundStatus.textContent = cloudEnabled ? 'on' : 'off';
     document.getElementById('toggleCloud').textContent = cloudEnabled ? 'Cloud: on' : 'Cloud: off';
-    if (!cloudEnabled) stopCloudTimer();
-    else startCloudTimer();
+    applyCloudMute();
   });
 
   document.getElementById('toggleCloudVoice').addEventListener('click', () => {
@@ -640,6 +684,10 @@ const appJS = `
 
       if (ev.type === 'cloud') {
         setCloudUI(ev);
+        return;
+      }
+      if (ev.type === 'cloud_pulse') {
+        onCloudPulse(ev);
         return;
       }
 

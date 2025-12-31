@@ -48,6 +48,18 @@ type CloudSnapshot struct {
 	Message  string  `json:"message"`
 }
 
+// CloudPulse is a per-market-update “click” signal.
+// It is intentionally lightweight and meant to be emitted at the pace of the feed.
+type CloudPulse struct {
+	Time      time.Time `json:"time"`
+	Symbol    string    `json:"symbol"`
+	Price     float64   `json:"price"`
+	Volume    float64   `json:"volume"`
+	DeltaPct  float64   `json:"delta_pct"`
+	Direction string    `json:"direction"` // up | down | flat
+	Strength  float64   `json:"strength"`  // 0..1
+}
+
 type CloudEngine struct {
 	cfg CloudConfig
 	wl  *watchlist.Watchlist
@@ -62,6 +74,7 @@ type CloudEngine struct {
 type cloudSym struct {
 	lastPrice    float64
 	lastDeltaPct float64
+	lastVol      float64
 	lastTs       time.Time
 	ready        bool
 }
@@ -127,12 +140,12 @@ func NewCloudEngine(cfg CloudConfig, wl *watchlist.Watchlist, log zerolog.Logger
 	return ce
 }
 
-func (c *CloudEngine) Update(symbol string, price float64, ts time.Time) {
+func (c *CloudEngine) Update(symbol string, price float64, volume float64, ts time.Time) (CloudPulse, bool) {
 	if !c.cfg.Enabled {
-		return
+		return CloudPulse{}, false
 	}
 	if price <= 0 {
-		return
+		return CloudPulse{}, false
 	}
 	if ts.IsZero() {
 		ts = time.Now()
@@ -142,10 +155,10 @@ func (c *CloudEngine) Update(symbol string, price float64, ts time.Time) {
 	if c.wl != nil {
 		ws := c.wl.Find(symbol)
 		if ws == nil {
-			return
+			return CloudPulse{}, false
 		}
 		if ws.Enabled != nil && !*ws.Enabled {
-			return
+			return CloudPulse{}, false
 		}
 	}
 
@@ -158,14 +171,56 @@ func (c *CloudEngine) Update(symbol string, price float64, ts time.Time) {
 		c.syms[symbol] = st
 	}
 
+	rawDelta := 0.0
 	if st.ready && st.lastPrice > 0 {
-		st.lastDeltaPct = ((price - st.lastPrice) / st.lastPrice) * 100.0
-	} else {
-		st.lastDeltaPct = 0
+		rawDelta = ((price - st.lastPrice) / st.lastPrice) * 100.0
 	}
+
+	// For pulse strength, clamp delta to CapMovePct (if configured) so outliers don’t blow out audio.
+	d := rawDelta
+	capMove := math.Abs(c.cfg.CapMovePct)
+	if capMove > 0 {
+		if d > capMove {
+			d = capMove
+		} else if d < -capMove {
+			d = -capMove
+		}
+	}
+
+	dir := "flat"
+	if d > 0 {
+		dir = "up"
+	} else if d < 0 {
+		dir = "down"
+	}
+
+	// Strength mapping (0..1)
+	str := 0.0
+	sp := c.cfg.StrengthPct
+	if sp == 0 {
+		sp = 0.03
+	}
+	if sp > 0 {
+		str = math.Abs(d) / sp
+		str = clamp(str, 0, 1)
+	}
+
+	// Persist state for Snapshot()
+	st.lastDeltaPct = rawDelta
 	st.lastPrice = price
+	st.lastVol = volume
 	st.lastTs = ts
 	st.ready = true
+
+	return CloudPulse{
+		Time:      ts,
+		Symbol:    symbol,
+		Price:     price,
+		Volume:    volume,
+		DeltaPct:  d,
+		Direction: dir,
+		Strength:  str,
+	}, true
 }
 
 // Snapshot computes a smoothed “market cloud” signal from latest per-symbol deltas.

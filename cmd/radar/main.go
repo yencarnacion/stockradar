@@ -260,6 +260,17 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to subscribe to Massive topic stocks sec aggs")
 	}
 
+	// Optional but recommended for “random timing” pulses:
+	// trades arrive at irregular times, unlike fixed 1s aggregates.
+	// If your account/topic permissions don’t allow it, we just log and continue.
+	if cfg.Cloud.Enabled {
+		if err := ws.Subscribe(massivews.StocksTrades, tickers...); err != nil {
+			log.Warn().Err(err).Msg("could not subscribe to stocks trades; cloud pulses will be less granular")
+		} else {
+			log.Info().Msg("subscribed to stocks trades for event-driven cloud pulses")
+		}
+	}
+
 	log.Info().
 		Int("symbols", len(tickers)).
 		Str("addr", srv.Addr()).
@@ -291,8 +302,24 @@ func main() {
 					continue
 				}
 
-				// Update cloud (watchlist-wide signal)
-				cloud.Update(t.Symbol, t.Price, t.Time)
+				// Update cloud + emit event-driven pulse (sound is now tied to real ticks)
+				if cfg.Cloud.Enabled {
+					pulse, ok2 := cloud.Update(t.Symbol, t.Price, t.Volume, t.Time)
+					// Only emit if there was actual activity/movement:
+					if ok2 && (pulse.DeltaPct != 0 || t.Volume > 0) {
+						srv.Broadcast(server.Event{
+							Time:      pulse.Time,
+							Symbol:    pulse.Symbol,
+							Price:     pulse.Price,
+							Volume:    pulse.Volume,
+							Type:      "cloud_pulse",
+							Message:   "",
+							Direction: pulse.Direction,
+							Strength:  pulse.Strength,
+							DeltaPct:  pulse.DeltaPct,
+						})
+					}
+				}
 
 				// Per-symbol alert engine
 				alerts := engine.Update(t.Symbol, t.Price, t.Volume, t.Time)
@@ -310,7 +337,22 @@ func main() {
 					continue
 				}
 
-				cloud.Update(t.Symbol, t.Price, t.Time)
+				if cfg.Cloud.Enabled {
+					pulse, ok2 := cloud.Update(t.Symbol, t.Price, t.Volume, t.Time)
+					if ok2 && (pulse.DeltaPct != 0 || t.Volume > 0) {
+						srv.Broadcast(server.Event{
+							Time:      pulse.Time,
+							Symbol:    pulse.Symbol,
+							Price:     pulse.Price,
+							Volume:    pulse.Volume,
+							Type:      "cloud_pulse",
+							Message:   "",
+							Direction: pulse.Direction,
+							Strength:  pulse.Strength,
+							DeltaPct:  pulse.DeltaPct,
+						})
+					}
+				}
 
 				alerts := engine.Update(t.Symbol, t.Price, t.Volume, t.Time)
 				for _, a := range alerts {
@@ -318,6 +360,52 @@ func main() {
 					case alertCh <- a:
 					default:
 						log.Warn().Msg("alert channel full; dropping alert")
+					}
+				}
+
+			// Trades: use for cloud pulses (irregular timing), but do NOT feed per-symbol alert engine
+			// unless you intentionally want much higher alert sensitivity.
+			case wsmodels.EquityTrade:
+				t, ok := tickFromAny(msg)
+				if !ok {
+					continue
+				}
+				if cfg.Cloud.Enabled {
+					pulse, ok2 := cloud.Update(t.Symbol, t.Price, t.Volume, t.Time)
+					if ok2 && (pulse.DeltaPct != 0 || t.Volume > 0) {
+						srv.Broadcast(server.Event{
+							Time:      pulse.Time,
+							Symbol:    pulse.Symbol,
+							Price:     pulse.Price,
+							Volume:    pulse.Volume,
+							Type:      "cloud_pulse",
+							Message:   "",
+							Direction: pulse.Direction,
+							Strength:  pulse.Strength,
+							DeltaPct:  pulse.DeltaPct,
+						})
+					}
+				}
+
+			case *wsmodels.EquityTrade:
+				t, ok := tickFromAny(msg)
+				if !ok {
+					continue
+				}
+				if cfg.Cloud.Enabled {
+					pulse, ok2 := cloud.Update(t.Symbol, t.Price, t.Volume, t.Time)
+					if ok2 && (pulse.DeltaPct != 0 || t.Volume > 0) {
+						srv.Broadcast(server.Event{
+							Time:      pulse.Time,
+							Symbol:    pulse.Symbol,
+							Price:     pulse.Price,
+							Volume:    pulse.Volume,
+							Type:      "cloud_pulse",
+							Message:   "",
+							Direction: pulse.Direction,
+							Strength:  pulse.Strength,
+							DeltaPct:  pulse.DeltaPct,
+						})
 					}
 				}
 
@@ -380,7 +468,12 @@ func tickFromAny(v any) (Tick, bool) {
 
 	sym := pickString(m, "sym", "Sym", "symbol", "Symbol", "ticker", "Ticker", "T")
 	price := pickFloat(m, "c", "C", "close", "Close", "price", "Price", "p", "P")
-	vol := pickFloat(m, "v", "V", "volume", "Volume")
+	// volume/size varies by message type (aggs vs trades)
+	vol := pickFloat(m,
+		"v", "V", "volume", "Volume",
+		"size", "Size", "qty", "Qty", "shares", "Shares",
+		"s", "S", "q", "Q",
+	)
 
 	// timestamps often in ms
 	tsms := pickInt64(m, "e", "E", "end", "End", "t", "T", "timestamp", "Timestamp")
