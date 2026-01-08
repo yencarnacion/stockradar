@@ -66,8 +66,8 @@ const indexHTML = `<!doctype html>
     <span class="pill">Cloud sound: <span id="cloudSoundStatus" class="mono">on</span></span>
     <button id="toggleCloud" class="secondary">Cloud: on</button>
 
-    <span class="pill">Cloud voice: <span id="cloudVoiceStatus" class="mono">on</span></span>
-    <button id="toggleCloudVoice" class="secondary">Cloud voice: on</button>
+    <span class="pill">Net voice: <span id="cloudVoiceStatus" class="mono">on</span></span>
+    <button id="toggleCloudVoice" class="secondary">Net voice: on</button>
   </div>
 
   <div class="cloudBox flat" id="cloudBox">
@@ -76,8 +76,11 @@ const indexHTML = `<!doctype html>
         <div class="cloudBig" id="cloudHeadline">Cloud: —</div>
         <div class="cloudSmall mono" id="cloudDetails">waiting for ticks…</div>
       </div>
-      <div class="barWrap" aria-label="cloud strength">
-        <div class="bar" id="cloudBar"></div>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+        <div class="cloudSmall mono" id="roll60Counts">60s ticks: up 0 • down 0 • net +0</div>
+        <div class="barWrap" aria-label="cloud strength">
+          <div class="bar" id="cloudBar"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -106,14 +109,84 @@ const appJS = `
   const cloudHeadline = document.getElementById('cloudHeadline');
   const cloudDetails = document.getElementById('cloudDetails');
   const cloudBar = document.getElementById('cloudBar');
+  const roll60Counts = document.getElementById('roll60Counts');
 
   const eventsEl = document.getElementById('events');
 
   let audioEnabled = false;
   let muted = false;
 
+  // --- MIX KNOBS ---
+  // Geiger (cloud clicks) overall loudness (0..1 typical)
+  const CLOUD_CLICK_MASTER_GAIN = 0.22;
+
+  // Cloud up/down voice amplification (WebAudio gain; can be > 1.0)
+  const CLOUD_VOICE_GAIN = 2.2;
+
   function setSSE(text){ sseStatus.textContent = text; }
   function setAudio(text){ audioStatus.textContent = text; }
+
+  // --- Rolling 60s UP vs DOWN counts (based on cloud_pulse events) ---
+  const ROLL60_MS = 60 * 1000;
+
+  // Store last 60s of pulses without O(n) shift() costs
+  const pulseRoll = []; // { t:number, dir:'up'|'down' }
+  let pulseHead = 0;
+  let rollUp = 0;
+  let rollDown = 0;
+
+  function prunePulseRoll(nowMs){
+    const cutoff = nowMs - ROLL60_MS;
+
+    while (pulseHead < pulseRoll.length && pulseRoll[pulseHead].t < cutoff) {
+      const old = pulseRoll[pulseHead];
+      if (old.dir === 'up') rollUp--;
+      else if (old.dir === 'down') rollDown--;
+      pulseHead++;
+    }
+
+    // occasional compaction
+    if (pulseHead > 2000 && pulseHead > (pulseRoll.length >> 1)) {
+      pulseRoll.splice(0, pulseHead);
+      pulseHead = 0;
+    }
+
+    if (rollUp < 0) rollUp = 0;
+    if (rollDown < 0) rollDown = 0;
+  }
+
+  function renderPulseRoll(){
+    if (!roll60Counts) return;
+    const now = Date.now();
+    prunePulseRoll(now);
+    const net = rollUp - rollDown;
+    roll60Counts.textContent =
+      '60s ticks: up ' + rollUp +
+      ' • down ' + rollDown +
+      ' • net ' + (net >= 0 ? '+' : '') + net;
+
+    // Speak net bucket only when the 20-range changes
+    const bucket = netBucket(net);
+    requestSpeakNetBucket(bucket, false);
+  }
+
+  function recordPulseRoll(ev){
+    if (!ev) return;
+    const dir = ev.direction || 'flat';
+    if (dir !== 'up' && dir !== 'down') return;
+
+    const now = Date.now();
+    pulseRoll.push({ t: now, dir: dir });
+    if (dir === 'up') rollUp++;
+    else rollDown++;
+
+    // prune + update immediately so it feels "live"
+    prunePulseRoll(now);
+    renderPulseRoll();
+  }
+
+  // Keep it rolling even when no new pulses arrive (so old ones age out)
+  setInterval(renderPulseRoll, 500);
 
   // Main voice-alert queue (WebAudio mixer + decoded buffer cache)
   let queue = [];
@@ -311,30 +384,101 @@ const appJS = `
     pump();
   }
 
-  // Cloud voice has its own tiny queue to ensure you actually hear it
+  // --- Cloud voice: "tape metronome" mode ---
+  // Goals:
+  // 1) Continuous cadence while UP/DOWN (speed ~ strength/breadth)
+  // 2) Never lag behind reality (queue <= 1)
+  // 3) Interrupt immediately on direction flips
+
   let cloudVoiceQueue = [];
   let cloudVoicePlaying = false;
+
   const cloudVoiceAudio = new Audio();
+  cloudVoiceAudio.preload = 'auto';
   cloudVoiceAudio.volume = 1.0;
-  cloudVoiceAudio.addEventListener('ended', () => { cloudVoicePlaying = false; cloudVoicePump(); });
-  cloudVoiceAudio.addEventListener('error', () => { cloudVoicePlaying = false; cloudVoicePump(); });
+
+  cloudVoiceAudio.addEventListener('ended', () => {
+    cloudVoicePlaying = false;
+    cloudVoicePump();
+  });
+
+  cloudVoiceAudio.addEventListener('error', () => {
+    cloudVoicePlaying = false;
+    cloudVoicePump();
+  });
+
+  // Route cloudVoiceAudio into WebAudio so we can boost volume above 1.0
+  let cloudVoiceMediaNode = null;
+  let cloudVoiceGainNode = null;
+
+  function ensureCloudVoiceRouting(){
+    // Must have audioCtx + voice graph
+    if (!ensureVoiceGraph()) return false;
+
+    // Only create ONE MediaElementSource per HTMLMediaElement (browser rule)
+    if (!cloudVoiceMediaNode) {
+      cloudVoiceMediaNode = audioCtx.createMediaElementSource(cloudVoiceAudio);
+
+      cloudVoiceGainNode = audioCtx.createGain();
+      cloudVoiceGainNode.gain.value = CLOUD_VOICE_GAIN;
+
+      // Cloud voice -> gain -> voiceBus (then compressor + master)
+      cloudVoiceMediaNode.connect(cloudVoiceGainNode);
+      cloudVoiceGainNode.connect(voiceBus);
+    }
+    return true;
+  }
+
+  function stopCloudVoiceNow(){
+    try {
+      cloudVoiceAudio.pause();
+      cloudVoiceAudio.currentTime = 0;
+    } catch(e) {}
+    cloudVoicePlaying = false;
+    cloudVoiceQueue = [];
+  }
 
   function cloudVoicePump(){
     if (!audioEnabled || muted) return;
     if (!cloudVoiceEnabled) return;
+
+    ensureAudioCtx();
+    if (!ensureCloudVoiceRouting()) return;
+
     if (cloudVoicePlaying) return;
+
     const next = cloudVoiceQueue.shift();
     if (!next) return;
+
     cloudVoicePlaying = true;
+
+    // Let WebAudio do the amplification; keep element volume at max
+    cloudVoiceAudio.volume = 1.0;
+
+    cloudVoiceAudio.playbackRate = 1.0;
+
     cloudVoiceAudio.src = next;
-    cloudVoiceAudio.play().catch(() => { cloudVoicePlaying = false; });
+    cloudVoiceAudio.play().catch(() => {
+      cloudVoicePlaying = false;
+      cloudVoicePump();
+    });
   }
 
   function cloudVoiceEnqueue(url, priority){
     if (!url) return;
-    if (priority) cloudVoiceQueue.unshift(url);
-    else cloudVoiceQueue.push(url);
-    if (cloudVoiceQueue.length > 20) cloudVoiceQueue = cloudVoiceQueue.slice(0, 20);
+    if (!audioEnabled || muted) return;
+    if (!cloudVoiceEnabled) return;
+
+    if (priority) {
+      // Direction flips should be felt NOW
+      stopCloudVoiceNow();
+      cloudVoiceQueue = [url];
+    } else {
+      // Never build latency. Keep only ONE pending item (the freshest).
+      if (cloudVoiceQueue.length === 0) cloudVoiceQueue.push(url);
+      else cloudVoiceQueue[0] = url;
+    }
+
     cloudVoicePump();
   }
 
@@ -348,13 +492,14 @@ const appJS = `
   let cloudStrength = 0.0;
   let cloudRateHz = 0.0; // kept for display only (no longer drives audio timing)
 
-  // cue URLs fetched from server (/api/cues)
-  let cues = { up:null, upStrong:null, down:null, downStrong:null, flat:null };
+  // cue URLs fetched from server (/api/cues) as a key->url map
+  // Keys used: flat, plus_<N>, minus_<N>
+  let cues = {};
 
-  // speech timing
-  let lastSpokenDir = null;
-  let lastVoiceAt = 0;
-  let lastStrong = false;
+  // Net voice state (only speak when bucket changes)
+  let lastNetBucketSpoken = null;
+  let wantedNetBucket = null;
+  let netSpeakInflight = false;
 
   function ensureAudioCtx(){
     if (!audioCtx) {
@@ -372,7 +517,7 @@ const appJS = `
   let cloudMaster = null;
 
   function applyCloudMute(){
-    if (cloudMaster) cloudMaster.gain.value = (muted || !cloudEnabled) ? 0.0 : 1.0;
+    if (cloudMaster) cloudMaster.gain.value = (muted || !cloudEnabled) ? 0.0 : CLOUD_CLICK_MASTER_GAIN;
   }
 
   function ensureCloudGraph(){
@@ -391,7 +536,7 @@ const appJS = `
       cloudComp.release.value = 0.08;
 
       cloudMaster = audioCtx.createGain();
-      cloudMaster.gain.value = (muted || !cloudEnabled) ? 0.0 : 1.0;
+      cloudMaster.gain.value = (muted || !cloudEnabled) ? 0.0 : CLOUD_CLICK_MASTER_GAIN;
 
       cloudBus.connect(cloudComp);
       cloudComp.connect(cloudMaster);
@@ -479,11 +624,16 @@ const appJS = `
       if (!res.ok) return false;
       const j = await res.json();
       const m = (j && j.cues) ? j.cues : {};
-      cues.up = m.up || cues.up;
-      cues.upStrong = m.upStrong || cues.upStrong;
-      cues.down = m.down || cues.down;
-      cues.downStrong = m.downStrong || cues.downStrong;
-      cues.flat = m.flat || cues.flat;
+      cues = m || {};
+
+      // Pull bucket settings from server config
+      const step = (j && j.net_bucket_step) ? parseInt(j.net_bucket_step, 10) : 0;
+      const flat = (j && j.net_bucket_flat) ? parseInt(j.net_bucket_flat, 10) : 0;
+      if (step > 0) NET_BUCKET_STEP = step;
+      if (flat > 0) NET_BUCKET_FLAT = flat;
+
+      // If config changed, force next net announcement to re-speak
+      lastNetBucketSpoken = null;
       return true;
     } catch(e) {
       return false;
@@ -502,59 +652,132 @@ const appJS = `
     }
   }
 
-  function cueFor(dir, strength){
-    const strong = strength >= 0.70;
+  // --- Net bucket speech (configurable) ---
+  // Defaults; overridden by /api/cues:
+  //   step=20, flat=20
+  //
+  // Example: step=30, flat=40
+  //   +40..+69 => +40
+  //   +70..+99 => +70
+  //   +100..+129 => +100
+  //
+  let NET_BUCKET_STEP = 20;
+  let NET_BUCKET_FLAT = 20;
+  const NET_BUCKET_MAX = 1000;
+  const NET_BUCKET_ABOVE_MAX = NET_BUCKET_MAX + 1;     // sentinel
+  const NET_BUCKET_BELOW_MAX = -(NET_BUCKET_MAX + 1);  // sentinel
 
-    if (dir === 'up') return strong ? cues.upStrong : cues.up;
-    if (dir === 'down') return strong ? cues.downStrong : cues.down;
-    if (dir === 'flat') return cues.flat;
-    return null;
+  function netBucket(net){
+    // flat between (-flat, +flat)
+    if (net > -NET_BUCKET_FLAT && net < NET_BUCKET_FLAT) return 0;
+
+    // cap beyond +/-1000
+    if (net > NET_BUCKET_MAX) return NET_BUCKET_ABOVE_MAX;
+    if (net < -NET_BUCKET_MAX) return NET_BUCKET_BELOW_MAX;
+
+    const step = Math.max(1, Math.abs((NET_BUCKET_STEP|0) || 20));
+    const base = Math.max(1, Math.abs((NET_BUCKET_FLAT|0) || 20));
+
+    // Buckets anchored at +/-base:
+    //   base..(base+step-1) => base
+    //   (base+step)..(base+2*step-1) => base+step
+    if (net > 0) return base + Math.floor((net - base) / step) * step;
+    return -(base + Math.floor((Math.abs(net) - base) / step) * step);
   }
 
-  async function speakDirOnceNow(){
-    // Called right after Enable Audio so you ALWAYS hear current state
-    let url = cueFor(cloudDir, cloudStrength);
-    if (!url) {
-      // fallback create
-      const txt = (cloudDir === 'up') ? 'up' : (cloudDir === 'down') ? 'down' : 'flat';
-      url = await fallbackSpeak(txt);
+  function netBucketKey(bucket){
+    if (bucket === 0) return 'flat';
+    if (bucket === NET_BUCKET_ABOVE_MAX) return 'above_1000';
+    if (bucket === NET_BUCKET_BELOW_MAX) return 'below_1000';
+    const mag = Math.abs(bucket);
+    return (bucket > 0 ? 'plus_' : 'minus_') + mag;
+  }
+
+  function numberToWords(n){
+    n = Math.floor(Math.abs(n));
+    if (n === 0) return 'zero';
+
+    const ones = ['zero','one','two','three','four','five','six','seven','eight','nine'];
+    const teens = ['ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+    const tens = ['zero','ten','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];
+
+    function under100(x){
+      if (x < 10) return ones[x];
+      if (x < 20) return teens[x - 10];
+      const t = Math.floor(x / 10);
+      const r = x % 10;
+      if (r === 0) return tens[t];
+      return tens[t] + ' ' + ones[r];
     }
-    if (url) cloudVoiceEnqueue(url, true);
+
+    function under1000(x){
+      if (x < 100) return under100(x);
+      const h = Math.floor(x / 100);
+      const r = x % 100;
+      if (r === 0) return ones[h] + ' hundred';
+      return ones[h] + ' hundred ' + under100(r);
+    }
+
+    if (n < 1000) return under1000(n);
+
+    const th = Math.floor(n / 1000);
+    const r = n % 1000;
+    const head = (th < 1000) ? under1000(th) : ('' + th);
+    if (r === 0) return head + ' thousand';
+    return head + ' thousand ' + under1000(r);
   }
 
-  function maybeSpeakCloud(dir, strength){
+  function netBucketPhrase(bucket){
+    if (bucket === 0) return 'flat';
+    if (bucket === NET_BUCKET_ABOVE_MAX) return 'above one thousand';
+    if (bucket === NET_BUCKET_BELOW_MAX) return 'below one thousand';
+    const mag = Math.abs(bucket);
+    const w = numberToWords(mag);
+    return (bucket > 0 ? 'plus ' : 'minus ') + w;
+  }
+
+  async function urlForNetBucket(bucket){
+    const k = netBucketKey(bucket);
+    if (cues && cues[k]) return cues[k];
+    return await fallbackSpeak(netBucketPhrase(bucket));
+  }
+
+  function requestSpeakNetBucket(bucket, force){
     if (!cloudVoiceEnabled) return;
     if (!audioEnabled || muted) return;
 
-    const strong = (dir === 'up' || dir === 'down') ? (strength >= 0.70) : false;
+    if (!force && bucket === lastNetBucketSpoken) return;
+
+    wantedNetBucket = bucket;
+    if (netSpeakInflight) return;
+
+    netSpeakInflight = true;
+    (async () => {
+      while (wantedNetBucket !== null && wantedNetBucket !== undefined) {
+        const b = wantedNetBucket;
+        wantedNetBucket = null;
+
+        const url = await urlForNetBucket(b);
+        if (url) {
+          cloudVoiceEnqueue(url, true);
+          lastNetBucketSpoken = b;
+        }
+      }
+    })().catch(()=>{}).finally(() => {
+      netSpeakInflight = false;
+    });
+  }
+
+  function currentNet(){
     const now = Date.now();
+    prunePulseRoll(now);
+    return rollUp - rollDown;
+  }
 
-    const dirChanged = (dir !== lastSpokenDir);
-    const strongBecameTrue = (!lastStrong && strong);
-
-    // Speak on direction change (including FLAT) or when we newly become "strong"
-    // and a small debounce so it doesn't chatter.
-    if ((dirChanged || strongBecameTrue) && (now - lastVoiceAt >= 900)) {
-      lastVoiceAt = now;
-      lastSpokenDir = dir;
-      lastStrong = strong;
-
-      const url = cueFor(dir, strength);
-      if (url) cloudVoiceEnqueue(url, true);
-      return;
-    }
-
-    // Heartbeat: if we haven't said anything in a while, remind the current direction.
-    // This ensures you don’t end up in “I see it but never hear it” situations.
-    const heartbeatMs = (dir === 'flat') ? 12000 : 6000;
-    if (now - lastVoiceAt >= heartbeatMs) {
-      lastVoiceAt = now;
-      lastSpokenDir = dir;
-      lastStrong = strong;
-
-      const url = cueFor(dir, strength);
-      if (url) cloudVoiceEnqueue(url, false);
-    }
+  async function speakNetOnceNow(){
+    const net = currentNet();
+    const bucket = netBucket(net);
+    requestSpeakNetBucket(bucket, true);
   }
 
   function setCloudUI(ev){
@@ -587,8 +810,6 @@ const appJS = `
     cloudStrength = strength;
     cloudRateHz = rate;
 
-    // Speak "up / down / flat" when appropriate
-    maybeSpeakCloud(dir, strength);
   }
 
   function addEvent(ev){
@@ -625,8 +846,8 @@ const appJS = `
     // Load pre-generated cue URLs (fast, no OpenAI calls in the browser)
     await loadCues();
 
-    // Speak current state immediately so you definitely hear "up/down/flat"
-    await speakDirOnceNow();
+    // Speak current 60s net bucket immediately (flat / plus twenty / minus twenty / ...)
+    await speakNetOnceNow();
     pump();
     cloudVoicePump();
   });
@@ -654,8 +875,14 @@ const appJS = `
   document.getElementById('toggleCloudVoice').addEventListener('click', () => {
     cloudVoiceEnabled = !cloudVoiceEnabled;
     cloudVoiceStatus.textContent = cloudVoiceEnabled ? 'on' : 'off';
-    document.getElementById('toggleCloudVoice').textContent = cloudVoiceEnabled ? 'Cloud voice: on' : 'Cloud voice: off';
-    if (cloudVoiceEnabled) cloudVoicePump();
+    document.getElementById('toggleCloudVoice').textContent = cloudVoiceEnabled ? 'Net voice: on' : 'Net voice: off';
+    if (!cloudVoiceEnabled) {
+      stopCloudVoiceNow();
+      lastNetBucketSpoken = null;
+      wantedNetBucket = null;
+    } else {
+      speakNetOnceNow();
+    }
   });
 
   // Test speak (existing)
@@ -687,6 +914,7 @@ const appJS = `
         return;
       }
       if (ev.type === 'cloud_pulse') {
+        recordPulseRoll(ev);
         onCloudPulse(ev);
         return;
       }

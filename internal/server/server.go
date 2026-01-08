@@ -21,6 +21,10 @@ type Config struct {
 	Port              int
 	AudioDir          string
 	ReadHeaderTimeout time.Duration
+
+	// Net-voice bucket settings (sent to the UI via /api/cues)
+	NetBucketStep int
+	NetBucketFlat int
 }
 
 type Event struct {
@@ -77,6 +81,20 @@ func New(cfg Config, ttsClient *tts.Client, log zerolog.Logger) *Server {
 	}
 	if cfg.ReadHeaderTimeout <= 0 {
 		cfg.ReadHeaderTimeout = 5 * time.Second
+	}
+
+	// Net bucket defaults
+	if cfg.NetBucketStep < 0 {
+		cfg.NetBucketStep = -cfg.NetBucketStep
+	}
+	if cfg.NetBucketFlat < 0 {
+		cfg.NetBucketFlat = -cfg.NetBucketFlat
+	}
+	if cfg.NetBucketStep == 0 {
+		cfg.NetBucketStep = 20
+	}
+	if cfg.NetBucketFlat == 0 {
+		cfg.NetBucketFlat = 20
 	}
 	_ = os.MkdirAll(cfg.AudioDir, 0o755)
 
@@ -322,7 +340,9 @@ func (s *Server) handleCuesJSON(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"cues": out,
+		"cues":            out,
+		"net_bucket_step": s.cfg.NetBucketStep,
+		"net_bucket_flat": s.cfg.NetBucketFlat,
 	})
 }
 

@@ -122,6 +122,13 @@ type CloudConfig struct {
 
 	// 0..1 blend: breadth vs avg move
 	BreadthWeight float64 `yaml:"breadth_weight"`
+
+	// Net “voice bucket” settings for the browser UI:
+	// - net_bucket_flat: values in (-flat, +flat) => "flat"
+	// - net_bucket_step: bucket step beyond flat
+	// Defaults preserve existing behavior (flat=20, step=20).
+	NetBucketStep int `yaml:"net_bucket_step"`
+	NetBucketFlat int `yaml:"net_bucket_flat"`
 }
 
 func Default() Config {
@@ -166,6 +173,8 @@ func Default() Config {
 			MinRateHz:     1.0,
 			MaxRateHz:     12.0,
 			BreadthWeight: 0.45,
+			NetBucketStep: 20,
+			NetBucketFlat: 20,
 		},
 	}
 }
@@ -263,6 +272,20 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Cloud.BreadthWeight > 1 {
 		cfg.Cloud.BreadthWeight = 1
+	}
+
+	// Net bucket defaults/sanity (UI net-voice feature)
+	if cfg.Cloud.NetBucketStep < 0 {
+		cfg.Cloud.NetBucketStep = -cfg.Cloud.NetBucketStep
+	}
+	if cfg.Cloud.NetBucketFlat < 0 {
+		cfg.Cloud.NetBucketFlat = -cfg.Cloud.NetBucketFlat
+	}
+	if cfg.Cloud.NetBucketStep == 0 {
+		cfg.Cloud.NetBucketStep = 20
+	}
+	if cfg.Cloud.NetBucketFlat == 0 {
+		cfg.Cloud.NetBucketFlat = 20
 	}
 
 	return cfg, nil

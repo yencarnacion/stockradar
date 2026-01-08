@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"flag"
 	"os"
 	"os/signal"
@@ -101,17 +102,44 @@ func main() {
 		Port:              cfg.Server.Port,
 		AudioDir:          cfg.Cache.AudioDir,
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.ToDuration(),
+		NetBucketStep:     cfg.Cloud.NetBucketStep,
+		NetBucketFlat:     cfg.Cloud.NetBucketFlat,
 	}, ttsClient, log.Logger)
 
 	// ---- NEW: Pre-generate the cloud cue audio ON STARTUP (only if missing) ----
-	// This ensures "up / down / flat" (and strong variants) are already in ./cache/audio.
+	// This ensures net-bucket voice cues (flat / plus twenty / minus twenty / ...) are already in ./cache/audio.
 	{
+		// Keys match the browser UI's netBucketKey():
+		//   flat, plus_<N>, minus_<N>
+		// where N are bucket labels: flat, flat+step, flat+2*step, ...
+
+		step := cfg.Cloud.NetBucketStep
+		flat := cfg.Cloud.NetBucketFlat
+		if step < 0 {
+			step = -step
+		}
+		if flat < 0 {
+			flat = -flat
+		}
+		if step == 0 {
+			step = 20
+		}
+		if flat == 0 {
+			flat = 20
+		}
+
+		// Preserve original “startup cost” feel (old code pregen’d up to +/-100).
+		const pregenMax = 100
+
 		cueTexts := map[string]string{
-			"up":         "up",
-			"upStrong":   "UP!",
-			"down":       "down",
-			"downStrong": "DOWN!",
 			"flat":       "flat",
+			"above_1000": "above one thousand",
+			"below_1000": "below one thousand",
+		}
+		for v := flat; v <= pregenMax; v += step {
+			w := numberToWords(v)
+			cueTexts[fmt.Sprintf("plus_%d", v)] = "plus " + w
+			cueTexts[fmt.Sprintf("minus_%d", v)] = "minus " + w
 		}
 
 		cues := make(map[string]string, len(cueTexts))
@@ -544,4 +572,64 @@ func pickInt64(m map[string]any, keys ...string) int64 {
 		}
 	}
 	return 0
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// numberToWords mirrors the browser UI’s numberToWords() so cache hits are consistent
+// for phrases like “plus seventy”, “minus one hundred”, etc.
+func numberToWords(n int) string {
+	n = absInt(n)
+	if n == 0 {
+		return "zero"
+	}
+
+	ones := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
+	teens := []string{"ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"}
+	tens := []string{"zero", "ten", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
+
+	under100 := func(x int) string {
+		if x < 10 {
+			return ones[x]
+		}
+		if x < 20 {
+			return teens[x-10]
+		}
+		t := x / 10
+		r := x % 10
+		if r == 0 {
+			return tens[t]
+		}
+		return tens[t] + " " + ones[r]
+	}
+
+	var under1000 func(int) string
+	under1000 = func(x int) string {
+		if x < 100 {
+			return under100(x)
+		}
+		h := x / 100
+		r := x % 100
+		if r == 0 {
+			return ones[h] + " hundred"
+		}
+		return ones[h] + " hundred " + under100(r)
+	}
+
+	if n < 1000 {
+		return under1000(n)
+	}
+
+	th := n / 1000
+	r := n % 1000
+	head := under1000(th)
+	if r == 0 {
+		return head + " thousand"
+	}
+	return head + " thousand " + under1000(r)
 }

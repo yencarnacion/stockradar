@@ -4,207 +4,33 @@
 # - momentum: alert when price moves +/-0.8% over a 60s rolling window
 # - cooldowns: reduce spam/repeats per symbol per rule
 symbols:
-  - ticker: AGQ
+  - ticker: QQQ
     enabled: true
     base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
     momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
 
-  - ticker: ANL
+  - ticker: LRCX
     enabled: true
     base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
     momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
 
-  - ticker: ASPC
+  - ticker: MU
     enabled: true
     base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
     momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
 
-  - ticker: BIVI
+  - ticker: WDC
     enabled: true
     base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
     momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
 
-  - ticker: BMNG
+  - ticker: SNDI
     enabled: true
     base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
     momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
 
-  - ticker: BZFD
+  - ticker: STX
     enabled: true
     base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
     momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
 
-  - ticker: CPNG
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: CPXR
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: CREV
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: DDL
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: DRMA
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: DUST
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: ECDA
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: ESHA
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: GAUZ
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: GSIT
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: HYMC
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: IKT
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: INDP
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: IZM
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: KXIN
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: MGIH
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: OMER
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: PALL
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: PLTM
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: PPLT
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: PPSI
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: PSLV
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: RKLZ
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SIDU
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SIVR
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SLV
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SLVP
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SMUP
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SOPA
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SPPP
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SQFT
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SRV
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: SUUN
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: UPC
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }
-
-  - ticker: ZSL
-    enabled: true
-    base_change: { up_pct: 1.5, down_pct: 1.5, cooldown: "120s" }
-    momentum: { window: "60s", up_pct: 0.8, down_pct: 0.8, cooldown: "60s" }

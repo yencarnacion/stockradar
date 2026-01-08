@@ -39,3 +39,8 @@ cloud:
   min_rate_hz: 1.0
   max_rate_hz: 12.0
   breadth_weight: 0.45
+  # Net-voice bucketing (browser side):
+  # - flat: if net is between (-flat, +flat), say "flat"
+  # - step: bucket size beyond flat
+  net_bucket_step: 20
+  net_bucket_flat: 20
